@@ -2,5 +2,6 @@
 {
   "name": "wisprflowportfolio",
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "." }
+  "assets": { "directory": "." },
+  "workers_dev": true   // keep the free *.workers.dev link switched on
 }
