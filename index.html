@@ -840,7 +840,7 @@
                 </div>
               </article>
               <article class="ccard" style="--c:#ffffeb">
-                <video src="assets/careers/costume-stylist.mp4?v=2" style="object-position: 50% 40%" aria-label="Me as a costume stylist" muted loop playsinline preload="none" onerror="this.closest('.ccard').classList.add('nophoto'); this.remove()"></video><span class="ccard-ph" aria-hidden="true">Photo soon</span>
+                <video src="assets/careers/costume-stylist.mp4?v=2" style="object-position: 50% 40%" aria-label="Me as a costume stylist" muted loop playsinline preload="none" onerror="if (!this.src.includes('/stream/')) { this.closest('.ccard').classList.add('nophoto'); this.remove() }"></video><span class="ccard-ph" aria-hidden="true">Photo soon</span>
                 <div class="ccard-body">
                   <em class="ccard-num">07 / 50</em>
                   <h3>Costume Stylist</h3>
@@ -970,12 +970,12 @@
             <h2>The <em>Wisprer.</em></h2>
             <p>A few campaigns, off the top of my head, that we can do together:</p>
             <div class="camps" aria-live="polite">
-                <article class="camp" data-video="assets/campaigns/baddies-dont-type.mp4?v=4">
+                <article class="camp" data-video="assets/campaigns/baddies-dont-type.mp4?v=4" data-poster="assets/posters/baddies.jpg">
                   <em class="camp-num">Campaign 1 / 3</em>
                   <h3>Baddies Don't Type</h3>
                   <p>Baddies with their hands full: one is cooking, one is painting her nails, and both are Wispring their messages. Typing is so last season.</p>
                 </article>
-                <article class="camp" data-video="assets/campaigns/walk-the-talk.mp4?v=2" data-loop data-silent>
+                <article class="camp" data-video="assets/campaigns/walk-the-talk.mp4?v=2" data-poster="assets/posters/walk.jpg" data-loop data-silent>
                   <em class="camp-num">Campaign 2 / 3</em>
                   <h3>Walk the Talk</h3>
                   <p>A steps challenge with a fitness app: track the steps people take while they Wispr, and crown whoever talks the most while they walk.</p>
@@ -1025,7 +1025,7 @@
             <h2>Behind the <em>scenes.</em></h2>
             <p>I built this whole website by speaking, and here's what it looked like to poor Claude 😂</p>
             <figure class="tile video" aria-label="Behind the scenes video">
-              <video src="assets/bts.mp4?v=3" loop playsinline preload="none" onerror="this.parentElement.classList.add('empty')"></video><span class="ph">Video: me wispring this site into existence, hula hooping and all</span>
+              <video src="assets/bts.mp4?v=3" poster="assets/posters/bts.jpg" loop playsinline preload="none" onerror="if (!this.src.includes('/stream/')) this.parentElement.classList.add('empty')"></video><span class="ph">Video: me wispring this site into existence, hula hooping and all</span>
               <button class="cv-mute" type="button" aria-label="Mute video" aria-pressed="false">
                 <svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>
                 <svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg>
@@ -1056,6 +1056,22 @@
 </main>
 
 <script>
+// Apple devices need videos sent in pieces, which Cloudflare's /stream/ helper does.
+// Everyone else loads them straight from /assets/. If the helper ever fails, fall back to /assets/.
+(() => {
+  const ua = navigator.userAgent;
+  const apple = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ||
+    (/Safari/.test(ua) && !/Chrome|Chromium|Edg|Android|Firefox/.test(ua));
+  if (!apple || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return;
+  const swap = u => u.replace(/^assets\//, "stream/");
+  document.querySelectorAll("video[src^='assets/']").forEach(v => { v.src = swap(v.getAttribute("src")); });
+  document.querySelectorAll(".camp[data-video]").forEach(c => { c.dataset.video = swap(c.dataset.video); });
+  document.querySelectorAll("video").forEach(v => v.addEventListener("error", () => {
+    const src = v.getAttribute("src") || "";
+    if (src.startsWith("stream/")) { v.src = src.replace(/^stream\//, "assets/"); v.play().catch(() => {}); }
+  }, true));
+})();
+
 // Always start at the top: no restored scroll position from a previous visit
 history.scrollRestoration = "manual";
 scrollTo(0, 0);
@@ -1364,6 +1380,10 @@ function enter() {
   document.documentElement.classList.remove("locked");
   gate.classList.add("open");
   setTimeout(() => { gate.style.display = "none"; }, 700);   // after the fade, take it off the page entirely
+  // Start fetching the videos in the background now, so they're ready by the time you scroll to them
+  setTimeout(() => {
+    document.querySelectorAll("video").forEach(v => { v.preload = "auto"; });
+  }, 1500);
 }
 
 // Hold with mouse / touch
@@ -1491,10 +1511,11 @@ document.querySelectorAll(".camps").forEach(stack => {
     video.loop = "loop" in camps[n].dataset;   // short clips play on repeat
     silent = "silent" in camps[n].dataset;      // no sound in this one: no mute button either
     box.classList.toggle("silent", silent);
+    video.poster = camps[n].dataset.poster || "";   // a still frame shows at once while the video loads
     video.src = camps[n].dataset.video;
     play();   // phones load nothing until asked to play, so don't wait for it to load first
   };
-  video.addEventListener("error", () => box.classList.contains("pic") || box.classList.add("empty"));   // no video yet: "Video coming soon"
+  video.addEventListener("error", () => box.classList.contains("pic") || video.src.includes("/stream/") || box.classList.add("empty"));   // no video yet: "Video coming soon"
   mute.addEventListener("click", () => { setMuted(!muted); if (!muted) play(); });
   // Play when the page arrives, pause when it leaves
   new MutationObserver(() => here() ? play() : video.pause()).observe(panel, { attributes: true, attributeFilter: ["class"] });
