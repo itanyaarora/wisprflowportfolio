@@ -227,6 +227,9 @@
      The page scrolls down as usual, but the stage stays pinned and the panels
      slide sideways. The background blends from one panel's colour to the next. */
   .ride { position: relative; height: 800vh; }   /* about one screen of scrolling per panel */
+  /* Every stop is a snap point: any swipe, fast or slow, lands on the next stop and never flies past it */
+  html { scroll-snap-type: y mandatory; }
+  .snap { position: absolute; left: 0; width: 1px; height: 1px; pointer-events: none; scroll-snap-align: start; scroll-snap-stop: always; }
   .ride-stage {
     --bg: #034f46; --fg: #ffffeb; --em: #ffbcf2;
     position: sticky; top: 0; height: 100vh; overflow: hidden;
@@ -1770,19 +1773,7 @@ document.querySelectorAll(".tile.video").forEach(box => {
     return p < 0.995;
   }
 
-  // Never rest halfway: if scrolling stops while a page is gliding, finish the move to whichever page is nearer
-  const uAtF = f => f + holds.filter(h => h.at < f).reduce((t, h) => t + h.len, 0);   // page position → road
-  function settle() {
-    if (still || document.documentElement.classList.contains("locked")) return;   // not while the gate is up
-    const { u, f } = journey(), span = panels.length - 1 + TOTAL;
-    let target = null;
-    const i = Math.floor(f), t = f - i;
-    if (t > HOLD / 2 && t < 1 - HOLD / 2) target = uAtF(i + (t < 0.5 ? HOLD / 2 - 0.02 : 1 - HOLD / 2 + 0.02));
-    if (target !== null) scrollTo({ top: ride.offsetTop + (ride.offsetHeight - innerHeight) * target / span, behavior: "smooth" });
-  }
-
   function stop() {
-    settle();
     stage.classList.add("stopped");
     auto.classList.remove("moving", "parked");
     if (anim) anim.pause();
@@ -1850,7 +1841,7 @@ document.querySelectorAll(".tile.video").forEach(box => {
 
   addEventListener("scroll", onScroll, { passive: true });
   const sizeAuto = () => stage.style.setProperty("--auto-h", auto.offsetHeight + "px");
-  addEventListener("resize", () => { sizeRide(); sizeAuto(); drawRoad(); update(); });
+  addEventListener("resize", () => { sizeRide(); placeSnaps(); sizeAuto(); drawRoad(); update(); });
 
   // Keys: one press of an arrow, Page Up / Down or Space goes to the next stop (a page, or the next campaign).
   // Sideways scrolling (trackpad swipes, Shift + wheel) and sideways swipes drive the ride too.
@@ -1867,6 +1858,26 @@ document.querySelectorAll(".tile.video").forEach(box => {
     }
     return s.sort((a, b) => a - b);
   }
+  // An invisible snap point at every stop (the browser does the snapping, so it feels the same for every swipe)
+  const snaps = [];
+  function placeSnaps() {
+    const list = stops(), span = panels.length - 1 + TOTAL, room = ride.offsetHeight - innerHeight;
+    while (snaps.length < list.length) { const d = document.createElement("i"); d.className = "snap"; d.setAttribute("aria-hidden", "true"); ride.appendChild(d); snaps.push(d); }
+    snaps.forEach((d, k) => { d.style.display = k < list.length ? "" : "none"; if (k < list.length) d.style.top = Math.round(room * list[k] / span) + "px"; });
+  }
+  placeSnaps();
+  // Go one stop forward or back (counting from where the last step is headed, if it's still on its way)
+  let stepLock = 0, stepAt = -1e9, stepTo = null;
+  function step(dir) {
+    const now = performance.now();
+    if (now < stepLock) return;
+    stepLock = now + 350;
+    const from = now - stepAt < 800 && stepTo !== null ? stepTo : journey().u, list = stops();
+    const to = dir > 0 ? list.find(s => s > from + 0.05) : [...list].reverse().find(s => s < from - 0.05);
+    if (to === undefined) return;
+    stepAt = now; stepTo = to;
+    scrollTo({ top: ride.offsetTop + (ride.offsetHeight - innerHeight) * to / (panels.length - 1 + TOTAL), behavior: "smooth" });
+  }
   const NEXT = ["ArrowDown", "ArrowRight", "PageDown"], PREV = ["ArrowUp", "ArrowLeft", "PageUp"];
   addEventListener("keydown", e => {
     if (document.documentElement.classList.contains("locked") || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1874,21 +1885,35 @@ document.querySelectorAll(".tile.video").forEach(box => {
     const dir = NEXT.includes(e.key) || (e.key === " " && !e.shiftKey) ? 1 : PREV.includes(e.key) || (e.key === " " && e.shiftKey) ? -1 : 0;
     if (!dir) return;
     e.preventDefault();
-    const { u } = journey(), list = stops();
-    const to = dir > 0 ? list.find(s => s > u + 0.05) : [...list].reverse().find(s => s < u - 0.05);
-    if (to !== undefined) scrollTo({ top: ride.offsetTop + (ride.offsetHeight - innerHeight) * to / (panels.length - 1 + TOTAL), behavior: "smooth" });
+    stepLock = 0;
+    step(dir);
   });
+  // Mouse wheels and trackpads (up/down or sideways): one swipe or wheel roll = one stop.
+  // A trackpad keeps sending a long fading tail after a swipe; that tail is ignored, so a hard
+  // flick never flies past pages. A new push (the swipe speeds up again) counts as a new swipe.
+  let wheelSum = 0, wheelAt = -1e9, wheelPrev = 0, wheelUsed = false, wheelStepAt = -1e9;
   addEventListener("wheel", e => {
-    if (document.documentElement.classList.contains("locked") || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    if (document.documentElement.classList.contains("locked") || e.ctrlKey) return;   // ctrl + wheel / pinch is zoom
     e.preventDefault();
-    scrollBy(0, e.deltaX);
+    const scale = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? innerHeight : 1;
+    const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * scale, size = Math.abs(d), t = e.timeStamp;
+    if (t - wheelAt > 220) { wheelUsed = false; wheelSum = 0; }                                            // quiet for a moment: a new swipe
+    else if (wheelUsed && size > wheelPrev * 1.6 + 6 && t - wheelStepAt > 450) { wheelUsed = false; wheelSum = 0; }   // pushed again mid-tail
+    wheelAt = t; wheelPrev = size;
+    if (wheelUsed) return;
+    wheelSum += d;
+    if (Math.abs(wheelSum) >= 30) { wheelUsed = true; wheelStepAt = t; stepLock = 0; step(Math.sign(wheelSum)); }
   }, { passive: false });
   let touchX = 0, touchY = 0;
-  addEventListener("touchstart", e => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+  let swiped = false;
+  addEventListener("touchstart", e => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; swiped = false; }, { passive: true });
   addEventListener("touchmove", e => {
     if (document.documentElement.classList.contains("locked")) return;
     const dx = e.touches[0].clientX - touchX, dy = e.touches[0].clientY - touchY;
-    if (Math.abs(dx) > Math.abs(dy) * 1.2) { e.preventDefault(); scrollBy(0, -dx * 1.5); touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }
+    if (Math.abs(dx) > Math.abs(dy) * 1.2) {   // a sideways swipe on a phone: one stop per swipe
+      e.preventDefault();
+      if (Math.abs(dx) > 40 && !swiped) { swiped = true; stepLock = 0; step(dx < 0 ? 1 : -1); }
+    }
   }, { passive: false });
   sizeAuto();
   drawRoad();
