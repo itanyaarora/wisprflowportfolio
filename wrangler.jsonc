@@ -1,0 +1,6 @@
+// Cloudflare: this repo is a static site; serve the files at its top level
+{
+  "name": "wisprflowportfolio",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "." }
+}
